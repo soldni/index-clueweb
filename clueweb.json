@@ -1,0 +1,98 @@
+{
+    "settings": {
+        "index": {
+            "number_of_replicas": 1,
+            "number_of_shards": 2
+        },
+        "analysis": {
+            "filter": {
+                "my_stopwords_filter": {
+                    "type": "stop",
+                    "stopwords": "_english_"
+                },
+                "english_snow": {
+                    "type": "snowball",
+                    "language": "English"
+                },
+                "url_stopwords" : {
+                    "type" : "stop",
+                    "stopwords" : ["http", "https", "ftp", "www"]
+                },
+                "split_url" : {
+                    "type" : "word_delimiter",
+                    "catenate_numbers": true,
+                    "split_on_numerics": false,
+                    "generate_word_parts" : true,
+                    "generate_number_parts" : true
+                }
+            },
+            "analyzer": {
+                "text_analyzer": {
+                    "type": "custom",
+                    "tokenizer": "uax_url_email",
+                    "char_filter": [
+                        "html_strip"
+                    ],
+                    "filter": [
+                        "lowercase",
+                        "icu_normalizer",
+                        "my_stopwords_filter"
+                    ]
+                },
+                "text_snow_analyzer": {
+                    "type": "custom",
+                    "tokenizer": "uax_url_email",
+                    "char_filter": [
+                        "html_strip"
+                    ],
+                    "filter": [
+                        "lowercase",
+                        "icu_normalizer",
+                        "my_stopwords_filter",
+                        "english_snow"
+                    ]
+                },
+                "url_analyzer": {
+                    "type": "custom",
+                    "tokenizer": "letter",
+                    "filter": [
+                        "lowercase",
+                        "split_url",
+                        "split_url"
+                    ]
+                }
+            }
+        }
+    },
+    "mappings": {
+        "document": {
+            "properties": {
+                "body": {
+                    "type": "string",
+                    "similarity": "DFR",
+                    "store": true,
+                    "analyzer": "text_snow_analyzer",
+                    "include_in_all": true,
+                    "term_vector": "yes"
+                },
+                "title": {
+                    "type": "string",
+                    "similarity": "DFR",
+                    "store": true,
+                    "analyzer": "text_snow_analyzer",
+                    "include_in_all": true,
+                    "term_vector": "yes"
+                },
+                "url": {
+                    "type": "string",
+                    "analyzer": "url_analyzer"
+                },
+                "domain": {
+                    "type": "string",
+                    "analyzer": "url_analyzer",
+                    "term_vector": "yes"
+                }
+            }
+        }
+    }
+}

@@ -163,7 +163,7 @@ def extract_from_subset(basepath, status):
         for doc in warc:
 
             status.cnt += 1
-            if status.cnt % 10 == 0:
+            if status.cnt % 100 == 0:
                 delta = time.time() - status.start
                 msg = (
                     '{}: {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
