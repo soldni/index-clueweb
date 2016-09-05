@@ -9,6 +9,9 @@ import gzip
 from utils import elastic
 
 
+CLUEWEB_PATH = '/lustre/irlab/datasets/ClueWeb12-b13'
+
+
 class WarcHeader(dict):
     def __init__(self):
         dict.__init__(self)
@@ -71,3 +74,5 @@ def files_iterator(basepath, opts):
                 warc = WarcFile(f)
 
 
+def main(clueweb_fp=CLUEWEB_PATH):
+    paths = [p for p in os.listdir(clueweb_fp)]
