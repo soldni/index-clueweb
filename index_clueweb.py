@@ -1,15 +1,20 @@
 # built-in modules
 import re
+import os
 import gzip
+import chardet
 
 # installed modules
 # None
 
 # project modules
 from utils import elastic
+from utils.meta import timer
+from utils.multiprocessing import pool_map
 
 
-CLUEWEB_PATH = '/lustre/irlab/datasets/ClueWeb12-b13'
+CLUEWEB_PATH = '/home/ls988/clueweb12-b13/clueweb12-b13/'
+DEBUG = True
 
 
 class WarcHeader(dict):
@@ -23,11 +28,25 @@ class WarcRecord(dict):
         dict.__init__(self)
         self.__dict__ = self
 
+        encoding_match = re.search(rb'charset=([a-zA-Z0-9\-]+)', raw_record)
+
+        encoding = (
+            encoding_match.group(1).decode('ascii')
+            if encoding_match else 'utf-8'
+        )
+
+        try:
+            raw_record = raw_record.decode(encoding)
+        except UnicodeDecodeError:
+            encoding = chardet.detect(raw_record)['encoding']
+            raw_record = raw_record.decode(encoding)
+
         warc_hearder, html_header, content = raw_record.split('\n\n', 2)
 
         self._parse_header(warc_hearder)
         self._parse_header(html_header)
-        self.content = content
+
+        self.content = content.strip()
 
     def _parse_header(self, raw_header):
         header_name = '_meta'
@@ -55,24 +74,43 @@ class WarcRecord(dict):
 class WarcFile(list):
     def __init__(self, raw_content, version='1.0'):
 
+        warc_split = 'WARC/{}'.format(version).encode('ascii')
+
         content = [
-            'WARC/{}{}'.format(
-                version,
-                raw_record.replace('\r\n', '\n')
-                )
+            (
+                warc_split +
+                raw_record.replace(b'\r\n', b'\n')
+            )
             for raw_record in
-            raw_content.split('WARC/{}'.format(version))[1:]
+            raw_content.split(warc_split)[1:]
         ]
         self.info = WarcRecord(content.pop(0))
-        super(WarcFile, self).__init__(content)
+
+        super(WarcFile, self).__init__(
+            [WarcRecord(raw_record) for raw_record in content]
+        )
 
 
-def files_iterator(basepath, opts):
+def files_iterator(basepath):
     for dirname in os.listdir(basepath):
         for fn_gz in os.listdir(os.path.join(basepath, dirname)):
-            with gzip.open(fn_gz, mode='r', encoding='utf-8') as f:
-                warc = WarcFile(f)
+            fp_gz = os.path.join(basepath, dirname, fn_gz)
+            with gzip.open(fp_gz) as f:
+                content = f.read()
+                warc = WarcFile(content)
+
+            import ipdb; ipdb.set_trace()
 
 
 def main(clueweb_fp=CLUEWEB_PATH):
-    paths = [p for p in os.listdir(clueweb_fp)]
+    paths = [
+        os.path.join(clueweb_fp, p) for p in os.listdir(clueweb_fp)
+        if os.path.isdir(os.path.join(clueweb_fp, p)) and
+        'ClueWeb12_' in p
+    ]
+
+    pool_map(files_iterator, [paths], single_thread=DEBUG)
+
+
+if __name__ == '__main__':
+    main()
