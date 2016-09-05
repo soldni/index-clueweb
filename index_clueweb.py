@@ -4,6 +4,7 @@ import os
 import gzip
 import time
 import chardet
+import itertools
 import html.parser
 
 # installed modules
@@ -31,10 +32,10 @@ class ClueWebIndexingError(RuntimeError):
         super(ClueWebIndexingError, self).__init__()
 
 
-def beautify(html_text):
+def simplify_html(html_text):
     parser = html.parser.HTMLParser()
 
-    html_text = html_text.replace('\\', ' ').replace('\r', '\n')
+    # html_text = html_text.replace('\r\n', '\n')
     html_text = re.sub(r'<br\\?>', '\n', html_text)
     html_text = html_text.replace('><', '> <')
 
@@ -81,17 +82,27 @@ class WarcRecord(dict):
         )
 
         try:
-            raw_record = raw_record.decode(encoding)
-        except(UnicodeDecodeError, LookupError):
-            encoding = chardet.detect(raw_record)['encoding']
-            raw_record = raw_record.decode(encoding, errors='ignore')
+            raw_record_dec = raw_record.decode(encoding)
+            try:
+                warc_hearder, html_header, content =\
+                    raw_record_dec.split('\n\n', 2)
+                has_decoded = True
+            except ValueError:
+                has_decoded = False
+        except (UnicodeDecodeError, LookupError):
+            has_decoded = False
 
-        warc_hearder, html_header, content = raw_record.split('\n\n', 2)
+        if not has_decoded:
+            encoding = chardet.detect(raw_record)['encoding']
+            raw_record_dec = raw_record.decode(encoding, errors='ignore')
+            warc_hearder, html_header, content =\
+                raw_record_dec.split('\n\n', 2)
 
         self._parse_header(warc_hearder)
         self._parse_header(html_header)
 
         self.content = content.strip()
+
 
     def _parse_header(self, raw_header):
         header_name = '_meta'
@@ -136,57 +147,23 @@ class WarcFile(list):
         )
 
 
-def files_iterator(basepath):
-    if not DEBUG:
-        progress = Progress(PROGRESS_FILE)
+# def read_warc(warc_path, version='1.0'):
+#     warc_split = 'WARC/{}\r\n'.format(version).encode('ascii')
 
-    for dirname in os.listdir(basepath):
-        for fn_gz in os.listdir(os.path.join(basepath, dirname)):
-            fp_gz = os.path.join(basepath, dirname, fn_gz)
+#     cnt = -2
+#     acc = []
 
-            if not DEBUG and fp_gz in progress:
-                continue
+#     with gzip.open(warc_path) as gzf:
+#         for ln in gzf:
+#             if ln == warc_split:
+#                 cnt += 1
+#                 if cnt > 0:
+#                     raw_record = b''.join(acc)
+#                     yield WarcRecord(raw_record)
+#                 del acc[:]
+#             acc.append(ln)
 
-            with gzip.open(fp_gz) as f:
-                content = f.read()
-                warc = WarcFile(content)
-                yield warc
-
-            if not DEBUG:
-                progress.add(fp_gz)
-
-
-def extract_from_subset(basepath, status):
-    files = files_iterator(basepath)
-
-    for warc in files:
-        for doc in warc:
-
-            status.cnt += 1
-            if status.cnt % 100 == 0:
-                delta = time.time() - status.start
-                msg = (
-                    '{}: {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
-                    ''.format(status.id, status.cnt, delta, delta / status.cnt)
-                )
-                print(msg)
-
-            if doc.content.strip():
-                title, body = beautify(doc.content)
-            else:
-                title = body = ''
-
-            doc = {
-                '_id': doc.WARC.WARC_TREC_ID,
-                'url': doc.WARC.WARC_Target_URI,
-                'domain':
-                    re.match(DOMAIN_RE, doc.WARC.WARC_Target_URI).group(1),
-                '_type': 'document',
-                'title': title,
-                'body': body
-            }
-
-            yield doc
+#     yield WarcRecord(b''.join(acc))
 
 
 class Progress(object):
@@ -203,9 +180,13 @@ class Progress(object):
         return self._progress.__contains__(_id)
 
     def add(self, _id):
+        self._progress.add(_id)
+        return Progress.append(path, _id)
+
+    @staticmethod
+    def append(self, path, _id):
         with open(path, 'a') as f:
             f.write('{}\n'.format(_id))
-        self._progress.add(_id)
 
     @staticmethod
     def make(path, overwrite=False):
@@ -214,24 +195,64 @@ class Progress(object):
                 pass
 
 
-def index_subset(basepath):
+def warc_filepaths_iterator(basepath):
+    progress = Progress(PROGRESS_FILE)
 
-    status = Bunch(
-        cnt=0, start=time.time(),
-        id=re.search(r'_(\d+)', basepath.rsplit('/', 1)[1]).group(1)
-    )
+    for dirname in os.listdir(basepath):
+        for fn_gz in os.listdir(os.path.join(basepath, dirname)):
+            fp_gz = os.path.join(basepath, dirname, fn_gz)
 
+            if fp_gz in progress:
+                continue
+
+            yield fp_gz
+
+
+def extract_from_warc(warc_path):
+    start = time.time()
+
+    with gzip.open(warc_path) as gzf:
+        warc = WarcFile(gzf.read())
+
+    cnt = 0
+
+    for doc in warc:
+        cnt += 1
+        if doc.content.strip():
+            title, body = simplify_html(doc.content)
+        else:
+            title = body = ''
+
+        doc = {
+            '_id': doc.WARC.WARC_TREC_ID,
+            'url': doc.WARC.WARC_Target_URI,
+            'domain':
+                re.match(DOMAIN_RE, doc.WARC.WARC_Target_URI).group(1),
+            '_type': 'document',
+            'title': title,
+            'body': body
+        }
+
+        yield doc
+
+    progress.append(PROGRESS_FILE, warc_path)
+
+    delta = time.time() - start
+    per_doc = delta / cnt
+    print('{}: {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
+          ''.format(warc_path, cnt, delta, per_doc))
+
+
+def index_warc(warc_file):
     es_client = elastic.get_client(
         host=ES_HOST, port=ES_PORT, timeout=120, index_name=INDEX_NAME
     )
-    extracted = extract_from_subset(basepath, status)
+    extracted = extract_from_warc(warc_file)
     elastic.index_in_bulk(extracted, es_client=es_client)
 
 
 def main(clueweb_fp=CLUEWEB_PATH):
-
-    if not DEBUG:
-        Progress.make(PROGRESS_FILE)
+    Progress.make(PROGRESS_FILE)
 
     es_client = elastic.get_client(
             host=ES_HOST, port=ES_PORT, timeout=120, index_name=INDEX_NAME
@@ -240,16 +261,16 @@ def main(clueweb_fp=CLUEWEB_PATH):
         index_name=INDEX_NAME,
         index_settings='clueweb.json',
         es_client=es_client,
-        allow_if_not_deleted=(not DEBUG)
+        allow_if_not_deleted=True
     )
 
-    paths = [
+    base_paths = [
         os.path.join(clueweb_fp, p) for p in os.listdir(clueweb_fp)
         if os.path.isdir(os.path.join(clueweb_fp, p)) and
         'ClueWeb12_' in p
     ]
-
-    pool_map(index_subset, [paths], single_thread=DEBUG)
+    paths = itertools.chain(*(warc_filepaths_iterator(p) for p in base_paths))
+    pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
 
 
 if __name__ == '__main__':
