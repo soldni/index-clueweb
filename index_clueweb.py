@@ -25,6 +25,7 @@ ES_HOST = 'devram4.cs.georgetown.edu'
 ES_PORT = 9200
 INDEX_NAME = 'clueweb12_b13'
 PROGRESS_FILE = 'progress.txt'
+SKIPPED_FILE = 'skipped.txt'
 
 
 class ClueWebIndexingError(RuntimeError):
@@ -146,26 +147,6 @@ class WarcFile(list):
             [WarcRecord(raw_record) for raw_record in content]
         )
 
-
-# def read_warc(warc_path, version='1.0'):
-#     warc_split = 'WARC/{}\r\n'.format(version).encode('ascii')
-
-#     cnt = -2
-#     acc = []
-
-#     with gzip.open(warc_path) as gzf:
-#         for ln in gzf:
-#             if ln == warc_split:
-#                 cnt += 1
-#                 if cnt > 0:
-#                     raw_record = b''.join(acc)
-#                     yield WarcRecord(raw_record)
-#                 del acc[:]
-#             acc.append(ln)
-
-#     yield WarcRecord(b''.join(acc))
-
-
 class Progress(object):
     def __init__(self, path):
         if not os.path.exists(path):
@@ -194,6 +175,11 @@ class Progress(object):
             with open(path, 'w') as f:
                 pass
 
+    @staticmethod
+    def write_skipped(li, path):
+        with open(path, 'w') as f:
+            f.write('\n'.join(li))
+
 
 def warc_filepaths_iterator(basepath):
     progress = Progress(PROGRESS_FILE)
@@ -213,6 +199,10 @@ def extract_from_warc(warc_path):
 
     with gzip.open(warc_path) as gzf:
         warc = WarcFile(gzf.read())
+
+    delta = time.time() - start
+    print('[info] warc "{}" extracted in {:.0f} s ({:,} pages)'
+          ''.format(warc_path.rsplit('/', 1)[1], delta, len(warc)))
 
     cnt = 0
 
@@ -235,12 +225,12 @@ def extract_from_warc(warc_path):
 
         yield doc
 
-    progress.append(PROGRESS_FILE, warc_path)
+    Progress.append(PROGRESS_FILE, warc_path)
 
     delta = time.time() - start
     per_doc = delta / cnt
-    print('{}: {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
-          ''.format(warc_path, cnt, delta, per_doc))
+    print('[info] "{}": {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
+          ''.format(warc_path.rsplit('/', 1)[1], cnt, delta, per_doc))
 
 
 def index_warc(warc_file):
@@ -248,7 +238,10 @@ def index_warc(warc_file):
         host=ES_HOST, port=ES_PORT, timeout=120, index_name=INDEX_NAME
     )
     extracted = extract_from_warc(warc_file)
-    elastic.index_in_bulk(extracted, es_client=es_client)
+    _, skipped = elastic.index_in_bulk(
+        extracted, es_client=es_client, bulk_size_in_bytes=7500000
+    )
+    return skipped
 
 
 def main(clueweb_fp=CLUEWEB_PATH):
@@ -270,8 +263,9 @@ def main(clueweb_fp=CLUEWEB_PATH):
         'ClueWeb12_' in p
     ]
     paths = itertools.chain(*(warc_filepaths_iterator(p) for p in base_paths))
-    pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
-
+    skipped = pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
+    skipped = list(itertools.chain(*skipped))
+    Progress.write_skipped(skipped, SKIPPED_FILE)
 
 if __name__ == '__main__':
     main()
