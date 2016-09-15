@@ -91,3 +91,9 @@ ENV/
 
 # Progress file
 progress.txt
+
+# Skipped documents
+skipped.txt
+
+# ignore backup files
+*.bkp

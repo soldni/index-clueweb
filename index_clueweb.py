@@ -1,23 +1,29 @@
 # built-in modules
 import re
 import os
+import sys
 import gzip
 import time
+import random
 import chardet
 import itertools
 import html.parser
 
 # installed modules
 from bs4 import BeautifulSoup
+from boilerpipe.extract import Extractor
 
 # project modules
 from utils import elastic
-from utils.meta import timer
-from utils.core import Bunch
 from utils.multiprocessing import pool_map
+from utils.meta import timer
 
 
 DOMAIN_RE = r'^(?:https?:\/\/)?(?:[^@\/\n]+@)?(?:www\.)?([^:\/\n]+)'
+URL_RE = (
+    rb'http[s]?://(?:[a-zA-Z]|[0-9]|[$-_@.&+]|[!*\(\),]|'
+    rb'(?:%[0-9a-fA-F][0-9a-fA-F]))+'
+)
 CLUEWEB_PATH = '/home/ls988/clueweb12-b13/clueweb12-b13/'
 DEBUG = False
 
@@ -41,14 +47,10 @@ def simplify_html(html_text):
     html_text = html_text.replace('><', '> <')
 
     # try:
-    soup = BeautifulSoup(html_text, 'html.parser')
+    soup = BeautifulSoup(html_text, 'lxml')
 
     title = soup.find('title')
     title = parser.unescape(title.text) if title else ''
-
-    body_soup = soup.find('body')
-    if body_soup is None:
-        body_soup = soup
 
     for script in soup.find_all('script'):
         script.decompose()
@@ -59,7 +61,7 @@ def simplify_html(html_text):
     for tag in soup.find_all(True):
         tag.attrs.clear()
 
-    body_text = body_soup.text.replace('[ \t]{2:}', '\n\n')
+    body_text = soup.text.replace('[ \t]{2:}', '\n\n')
 
     return title, body_text
 
@@ -75,7 +77,17 @@ class WarcRecord(dict):
         dict.__init__(self)
         self.__dict__ = self
 
-        encoding_match = re.search(rb'charset=([a-zA-Z0-9\-]+)', raw_record)
+        warc_attr, html_attr, raw_content = \
+            re.split(rb'\n\s+', raw_record, maxsplit=2)
+
+        url_regex = rb'WARC-Target-URI: (' + URL_RE + rb')'
+        self.url = re.search(url_regex, warc_attr).group(1).decode('utf-8')
+
+        self.id = re.search(
+            rb'WARC-TREC-ID: ([a-zA-Z0-9\-]+)', warc_attr
+        ).group(1).decode('utf-8')
+
+        encoding_match = re.search(rb'charset=([a-zA-Z0-9\-]+)', raw_content)
 
         encoding = (
             encoding_match.group(1).decode('ascii')
@@ -83,54 +95,24 @@ class WarcRecord(dict):
         )
 
         try:
-            raw_record_dec = raw_record.decode(encoding)
-            try:
-                warc_hearder, html_header, content =\
-                    raw_record_dec.split('\n\n', 2)
-                has_decoded = True
-            except ValueError:
-                has_decoded = False
+            content = raw_content.decode(encoding)
+            has_decoded = True
         except (UnicodeDecodeError, LookupError):
             has_decoded = False
 
         if not has_decoded:
-            encoding = chardet.detect(raw_record)['encoding']
-            raw_record_dec = raw_record.decode(encoding, errors='ignore')
-            warc_hearder, html_header, content =\
-                raw_record_dec.split('\n\n', 2)
+            encoding = chardet.detect(raw_content)['encoding']
 
-        self._parse_header(warc_hearder)
-        self._parse_header(html_header)
+            if encoding is None:
+                encoding = 'utf-8'
+
+            content = raw_content.decode(encoding, errors='ignore')
 
         self.content = content.strip()
 
 
-    def _parse_header(self, raw_header):
-        header_name = '_meta'
-
-        for i, ln in enumerate(raw_header.strip().split('\n')):
-            try:
-                key, value = ln.split(':', 1)
-            except ValueError:
-                header_name, metadata = ln.split('/')
-                header_name = re.sub('\W+', '_', header_name)
-
-                if re.match(r'\d\.\d \d+ \w+', header_name):
-                    # HTTP header, first line has response code
-                    _, resp_code, _ = metadata.split()
-                    print(header_name)
-                    self.setdefault(header_name, WarcHeader())['resp_code'] =\
-                        resp_code
-
-                continue
-
-            key = re.sub('\W+', '_', key)
-            self.setdefault(header_name, WarcHeader())[key] = value.strip()
-
-
 class WarcFile(list):
     def __init__(self, raw_content, version='1.0'):
-
         warc_split = 'WARC/{}'.format(version).encode('ascii')
 
         content = [
@@ -141,11 +123,15 @@ class WarcFile(list):
             for raw_record in
             raw_content.split(warc_split)[1:]
         ]
-        self.info = WarcRecord(content.pop(0))
 
-        super(WarcFile, self).__init__(
-            [WarcRecord(raw_record) for raw_record in content]
-        )
+        # skip the header of the warc file
+        content.pop(0)
+
+        super(WarcFile, self).__init__()
+
+        for raw_record in content:
+            self.append(WarcRecord(raw_record))
+
 
 class Progress(object):
     def __init__(self, path):
@@ -157,15 +143,18 @@ class Progress(object):
 
         self.path = path
 
+    def __len__(self):
+        return len(self._progress)
+
     def __contains__(self, _id):
         return self._progress.__contains__(_id)
 
     def add(self, _id):
         self._progress.add(_id)
-        return Progress.append(path, _id)
+        return Progress.append(self.path, _id)
 
     @staticmethod
-    def append(self, path, _id):
+    def append(path, _id):
         with open(path, 'a') as f:
             f.write('{}\n'.format(_id))
 
@@ -173,7 +162,7 @@ class Progress(object):
     def make(path, overwrite=False):
         if not os.path.exists(path) or overwrite:
             with open(path, 'w') as f:
-                pass
+                f.write('')
 
     @staticmethod
     def write_skipped(li, path):
@@ -181,17 +170,22 @@ class Progress(object):
             f.write('\n'.join(li))
 
 
-def warc_filepaths_iterator(basepath):
+def warc_filepaths_iterator(basepath, ignore_progress=False):
     progress = Progress(PROGRESS_FILE)
 
     for dirname in os.listdir(basepath):
         for fn_gz in os.listdir(os.path.join(basepath, dirname)):
             fp_gz = os.path.join(basepath, dirname, fn_gz)
 
-            if fp_gz in progress:
+            if not(ignore_progress) and fp_gz in progress:
                 continue
 
             yield fp_gz
+
+
+def get_boilerpipe_body(content):
+    extractor = Extractor(extractor='ArticleExtractor', html=content)
+    return extractor.getText()
 
 
 def extract_from_warc(warc_path):
@@ -201,6 +195,7 @@ def extract_from_warc(warc_path):
         warc = WarcFile(gzf.read())
 
     delta = time.time() - start
+
     print('[info] warc "{}" extracted in {:.0f} s ({:,} pages)'
           ''.format(warc_path.rsplit('/', 1)[1], delta, len(warc)))
 
@@ -213,11 +208,20 @@ def extract_from_warc(warc_path):
         else:
             title = body = ''
 
+        # body_pipe = timer(get_boilerpipe_body)(doc.content)
+
+        # print(re.sub(r'\s?\n\s?', '\n', body))
+        # print('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
+        # print(body_pipe)
+        # print('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
+        # print(doc.url)
+        # print('\n\n')
+        # input()
+
         doc = {
-            '_id': doc.WARC.WARC_TREC_ID,
-            'url': doc.WARC.WARC_Target_URI,
-            'domain':
-                re.match(DOMAIN_RE, doc.WARC.WARC_Target_URI).group(1),
+            '_id': doc.id,
+            'url': doc.url,
+            'domain': re.match(DOMAIN_RE, doc.url).group(1),
             '_type': 'document',
             'title': title,
             'body': body
@@ -247,9 +251,19 @@ def index_warc(warc_file):
 def main(clueweb_fp=CLUEWEB_PATH):
     Progress.make(PROGRESS_FILE)
 
+    base_paths = [
+        os.path.join(clueweb_fp, p) for p in os.listdir(clueweb_fp)
+        if os.path.isdir(os.path.join(clueweb_fp, p)) and
+        'ClueWeb12_' in p
+    ]
+    paths = list(
+        itertools.chain(*(warc_filepaths_iterator(p) for p in base_paths)))
+    print('[info] {:,} files to index'.format(len(paths)))
+    random.shuffle(paths)
+
     es_client = elastic.get_client(
-            host=ES_HOST, port=ES_PORT, timeout=120, index_name=INDEX_NAME
-        )
+        host=ES_HOST, port=ES_PORT, timeout=120, index_name=INDEX_NAME
+    )
     elastic.create_index(
         index_name=INDEX_NAME,
         index_settings='clueweb.json',
@@ -257,15 +271,35 @@ def main(clueweb_fp=CLUEWEB_PATH):
         allow_if_not_deleted=True
     )
 
+    skipped = pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
+    skipped = list(itertools.chain(*skipped))
+    Progress.write_skipped(skipped, SKIPPED_FILE)
+
+
+def presence_test(clueweb_fp=CLUEWEB_PATH):
     base_paths = [
         os.path.join(clueweb_fp, p) for p in os.listdir(clueweb_fp)
         if os.path.isdir(os.path.join(clueweb_fp, p)) and
         'ClueWeb12_' in p
     ]
-    paths = itertools.chain(*(warc_filepaths_iterator(p) for p in base_paths))
-    skipped = pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
-    skipped = list(itertools.chain(*skipped))
-    Progress.write_skipped(skipped, SKIPPED_FILE)
+    paths = list(
+        itertools.chain(*(warc_filepaths_iterator(p, ignore_progress=True)
+                          for p in base_paths)))
+    print('[info] {:,} WARC files; counting docs'.format(len(paths)))
+    random.shuffle(paths)
+
+    def file_count(path):
+        with gzip.open(path) as f:
+            doc_cnt = f.read().count(b'WARC-TREC-ID')
+        return doc_cnt
+
+    total_cnt = sum(
+        pool_map(file_count, [paths], single_thread=DEBUG, cpu_ratio=0.99)
+    )
+
+    print('[info] {:,} documents'.format(total_cnt))
+
 
 if __name__ == '__main__':
     main()
+    # presence_test()
