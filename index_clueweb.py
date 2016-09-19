@@ -1,7 +1,6 @@
 # built-in modules
 import re
 import os
-import sys
 import gzip
 import time
 import random
@@ -16,8 +15,6 @@ from boilerpipe.extract import Extractor
 # project modules
 from utils import elastic
 from utils.multiprocessing import pool_map
-from utils.meta import timer
-
 
 DOMAIN_RE = r'^(?:https?:\/\/)?(?:[^@\/\n]+@)?(?:www\.)?([^:\/\n]+)'
 URL_RE = (
@@ -208,16 +205,6 @@ def extract_from_warc(warc_path):
         else:
             title = body = ''
 
-        # body_pipe = timer(get_boilerpipe_body)(doc.content)
-
-        # print(re.sub(r'\s?\n\s?', '\n', body))
-        # print('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
-        # print(body_pipe)
-        # print('\n@@@@@@@@@@@@@@@@@@@@@@@@@@@@\n')
-        # print(doc.url)
-        # print('\n\n')
-        # input()
-
         doc = {
             '_id': doc.id,
             'url': doc.url,
@@ -275,31 +262,5 @@ def main(clueweb_fp=CLUEWEB_PATH):
     skipped = list(itertools.chain(*skipped))
     Progress.write_skipped(skipped, SKIPPED_FILE)
 
-
-def presence_test(clueweb_fp=CLUEWEB_PATH):
-    base_paths = [
-        os.path.join(clueweb_fp, p) for p in os.listdir(clueweb_fp)
-        if os.path.isdir(os.path.join(clueweb_fp, p)) and
-        'ClueWeb12_' in p
-    ]
-    paths = list(
-        itertools.chain(*(warc_filepaths_iterator(p, ignore_progress=True)
-                          for p in base_paths)))
-    print('[info] {:,} WARC files; counting docs'.format(len(paths)))
-    random.shuffle(paths)
-
-    def file_count(path):
-        with gzip.open(path) as f:
-            doc_cnt = f.read().count(b'WARC-TREC-ID')
-        return doc_cnt
-
-    total_cnt = sum(
-        pool_map(file_count, [paths], single_thread=DEBUG, cpu_ratio=0.99)
-    )
-
-    print('[info] {:,} documents'.format(total_cnt))
-
-
 if __name__ == '__main__':
     main()
-    # presence_test()
