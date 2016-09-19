@@ -84,8 +84,8 @@ class WarcRecord(dict):
             rb'WARC-TREC-ID: ([a-zA-Z0-9\-]+)', warc_attr
         ).group(1).decode('utf-8')
 
+        # we try getting the encoding from the file itself
         encoding_match = re.search(rb'charset=([a-zA-Z0-9\-]+)', raw_content)
-
         encoding = (
             encoding_match.group(1).decode('ascii')
             if encoding_match else 'utf-8'
@@ -97,13 +97,20 @@ class WarcRecord(dict):
         except (UnicodeDecodeError, LookupError):
             has_decoded = False
 
+        # the encding specified in the document is not correct; so
+        # we use chardet to find it; if that still does not help,
+        # we default to unicode and ignore all errors.
+
         if not has_decoded:
             encoding = chardet.detect(raw_content)['encoding']
 
             if encoding is None:
                 encoding = 'utf-8'
 
-            content = raw_content.decode(encoding, errors='ignore')
+            try:
+                content = raw_content.decode(encoding, errors='ignore')
+            except LookupError:
+                content = raw_content.decode('utf-8', errors='ignore')
 
         self.content = content.strip()
 
