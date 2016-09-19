@@ -10,7 +10,7 @@ import html.parser
 
 # installed modules
 from bs4 import BeautifulSoup
-from boilerpipe.extract import Extractor
+# from boilerpipe.extract import Extractor
 
 # project modules
 from utils import elastic
@@ -180,9 +180,9 @@ def warc_filepaths_iterator(basepath, ignore_progress=False):
             yield fp_gz
 
 
-def get_boilerpipe_body(content):
-    extractor = Extractor(extractor='ArticleExtractor', html=content)
-    return extractor.getText()
+# def get_boilerpipe_body(content):
+#     extractor = Extractor(extractor='ArticleExtractor', html=content)
+#     return extractor.getText()
 
 
 def extract_from_warc(warc_path):
