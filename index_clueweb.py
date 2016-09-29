@@ -26,7 +26,7 @@ DEBUG = False
 
 ES_HOST = 'devram4.cs.georgetown.edu'
 ES_PORT = 9200
-INDEX_NAME = 'clueweb12_b13'
+INDEX_NAME = 'clueweb12b'
 PROGRESS_FILE = 'progress.txt'
 SKIPPED_FILE = 'skipped.txt'
 
@@ -226,7 +226,7 @@ def extract_from_warc(warc_path):
     Progress.append(PROGRESS_FILE, warc_path)
 
     delta = time.time() - start
-    per_doc = delta / cnt
+    per_doc = delta / cnt if cnt > 0 else 0
     print('[info] "{}": {:,} documents processed in {:.0f} s ({:.1e} s / doc)'
           ''.format(warc_path.rsplit('/', 1)[1], cnt, delta, per_doc))
 
@@ -268,6 +268,7 @@ def main(clueweb_fp=CLUEWEB_PATH):
     skipped = pool_map(index_warc, [paths], single_thread=DEBUG, cpu_ratio=.96)
     skipped = list(itertools.chain(*skipped))
     Progress.write_skipped(skipped, SKIPPED_FILE)
+
 
 if __name__ == '__main__':
     main()

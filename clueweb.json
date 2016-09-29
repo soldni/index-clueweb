@@ -1,8 +1,8 @@
 {
     "settings": {
         "index": {
-            "number_of_replicas": 1,
-            "number_of_shards": 2
+            "number_of_replicas": 0,
+            "number_of_shards": 1
         },
         "analysis": {
             "filter": {
@@ -69,28 +69,59 @@
             "properties": {
                 "body": {
                     "type": "string",
-                    "similarity": "DFR",
-                    "store": true,
-                    "analyzer": "text_snow_analyzer",
-                    "include_in_all": true,
-                    "term_vector": "yes"
+                    "fields": {
+                        "default": {
+                            "type": "string",
+                            "similarity": "BM25",
+                            "store": false,
+                            "analyzer": "text_analyzer",
+                            "include_in_all": true,
+                            "term_vector": "yes"
+                        },
+                        "snow": {
+                            "type": "string",
+                            "similarity": "BM25",
+                            "store": false,
+                            "analyzer": "text_snow_analyzer",
+                            "include_in_all": true,
+                            "term_vector": "yes"
+                        }
+                    }
                 },
                 "title": {
                     "type": "string",
-                    "similarity": "DFR",
-                    "store": true,
-                    "analyzer": "text_snow_analyzer",
-                    "include_in_all": true,
-                    "term_vector": "yes"
+                    "fields": {
+                        "default": {
+                            "type": "string",
+                            "similarity": "BM25",
+                            "store": false,
+                            "analyzer": "text_analyzer",
+                            "include_in_all": true,
+                            "term_vector": "yes"
+                        },
+                        "snow": {
+                            "type": "string",
+                            "similarity": "BM25",
+                            "store": false,
+                            "analyzer": "text_snow_analyzer",
+                            "include_in_all": true,
+                            "term_vector": "yes"
+                        }
+                    }
                 },
                 "url": {
                     "type": "string",
-                    "analyzer": "url_analyzer"
+                    "analyzer": "url_analyzer",
+                    "term_vector": "yes",
+                    "include_in_all": false
+
+
                 },
                 "domain": {
                     "type": "string",
                     "analyzer": "url_analyzer",
-                    "term_vector": "yes"
+                    "term_vector": "yes",
+                    "include_in_all": false
                 }
             }
         }
